@@ -1,0 +1,59 @@
+# HashiCorp Vault Configuration
+# This file contains the Helm values for installing Vault on Kubernetes
+
+server:
+  # Run Vault in standalone mode (single instance)
+  # For production, consider using 'ha' mode with raft storage
+  standalone:
+    enabled: true
+    config: |
+      ui = true
+
+      listener "tcp" {
+        tls_disable = 1
+        address = "[::]:8200"
+        cluster_address = "[::]:8201"
+      }
+
+      storage "file" {
+        path = "/vault/data"
+      }
+
+  # Enable the Vault UI
+  dataStorage:
+    enabled: true
+    size: 10Gi
+    storageClass: null
+    accessMode: ReadWriteOnce
+
+  # Resources - adjust based on your needs
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+  # Service configuration
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 8200
+
+# UI service configuration
+ui:
+  enabled: true
+  serviceType: "ClusterIP"
+  externalPort: 8200
+
+# Injector for sidecar injection (optional, can be disabled if not needed)
+injector:
+  enabled: true
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 125m
+    limits:
+      memory: 256Mi
+      cpu: 250m

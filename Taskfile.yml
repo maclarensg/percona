@@ -1,0 +1,474 @@
+version: '3'
+
+tasks:
+  vault:install:
+    desc: Install HashiCorp Vault on Kubernetes using Helm
+    cmds:
+      - |
+        helm upgrade --install vault hashicorp/vault \
+          --version 0.31.0 \
+          --namespace vault \
+          --create-namespace \
+          --values vault/vault-values.yaml \
+          --wait
+        echo "✓ Vault installed successfully!"
+    silent: false
+
+  vault:uninstall:
+    desc: Uninstall Vault from Kubernetes
+    cmds:
+      - helm uninstall vault --namespace vault
+    silent: false
+
+  vault:status:
+    desc: Check Vault pod status
+    cmds:
+      - kubectl get pods -n vault
+    silent: false
+
+  vault:init:
+    desc: Initialize Vault and save unseal keys and root token
+    cmds:
+      - |
+        echo "Waiting for Vault pod to be running..."
+        kubectl wait --for=jsonpath='{.status.phase}'=Running pod/vault-0 -n vault --timeout=60s
+        sleep 5
+        echo "Initializing Vault..."
+        kubectl exec -n vault vault-0 -- vault operator init -key-shares=5 -key-threshold=3 > vault/vault-init-keys.txt
+        echo "✓ Vault initialized! Keys saved to vault/vault-init-keys.txt"
+        echo "⚠️  IMPORTANT: Store these keys securely and back them up!"
+    silent: false
+
+  vault:unseal:
+    desc: Unseal Vault using the first 3 unseal keys
+    cmds:
+      - |
+        echo "Unsealing Vault..."
+        KEY1=$(grep 'Unseal Key 1:' vault/vault-init-keys.txt | awk '{print $NF}')
+        KEY2=$(grep 'Unseal Key 2:' vault/vault-init-keys.txt | awk '{print $NF}')
+        KEY3=$(grep 'Unseal Key 3:' vault/vault-init-keys.txt | awk '{print $NF}')
+        kubectl exec -n vault vault-0 -- vault operator unseal $KEY1
+        kubectl exec -n vault vault-0 -- vault operator unseal $KEY2
+        kubectl exec -n vault vault-0 -- vault operator unseal $KEY3
+        echo "✓ Vault unsealed successfully!"
+    silent: false
+
+  vault:unseal-all:
+    desc: Unseal all Vault pods (for HA setup)
+    cmds:
+      - |
+        echo "Unsealing all Vault pods..."
+        KEY1=$(grep 'Unseal Key 1:' vault/vault-init-keys.txt | awk '{print $NF}')
+        KEY2=$(grep 'Unseal Key 2:' vault/vault-init-keys.txt | awk '{print $NF}')
+        KEY3=$(grep 'Unseal Key 3:' vault/vault-init-keys.txt | awk '{print $NF}')
+        for pod in $(kubectl get pods -n vault -l app.kubernetes.io/name=vault -o jsonpath='{.items[*].metadata.name}'); do
+          echo "Unsealing $pod..."
+          kubectl exec -n vault $pod -- vault operator unseal $KEY1 || true
+          kubectl exec -n vault $pod -- vault operator unseal $KEY2 || true
+          kubectl exec -n vault $pod -- vault operator unseal $KEY3 || true
+        done
+        echo "✓ All Vault pods unsealed!"
+    silent: false
+
+  vault:verify:
+    desc: Verify Vault installation and status
+    cmds:
+      - |
+        echo "=== Vault Pod Status ==="
+        kubectl get pods -n vault
+        echo ""
+        echo "=== Vault Service ==="
+        kubectl get svc -n vault
+        echo ""
+        echo "=== Vault Status ==="
+        kubectl exec -n vault vault-0 -- vault status || true
+    silent: false
+
+  vault:login:
+    desc: Display root token for manual login
+    cmds:
+      - |
+        ROOT_TOKEN=$(grep 'Initial Root Token:' vault/vault-init-keys.txt | awk '{print $NF}')
+        echo "Root Token: $ROOT_TOKEN"
+        echo ""
+        echo "To login to Vault:"
+        echo "kubectl exec -it -n vault vault-0 -- vault login $ROOT_TOKEN"
+    silent: false
+
+  vault:port-forward:
+    desc: Port forward Vault UI to localhost:8200
+    cmds:
+      - kubectl port-forward -n vault svc/vault 8200:8200
+    silent: false
+
+  vault:logs:
+    desc: View Vault logs
+    cmds:
+      - kubectl logs -n vault vault-0 -f
+    silent: false
+
+  vault:ingress:apply:
+    desc: Apply Vault ingress
+    cmds:
+      - |
+        kubectl apply -f vault/vault-ingress.yaml
+        echo "✓ Vault ingress applied!"
+        echo "Access Vault at http://vault.127-0-0-1.nip.io"
+    silent: false
+
+  vault:ingress:delete:
+    desc: Delete Vault ingress
+    cmds:
+      - kubectl delete -f vault/vault-ingress.yaml
+    silent: false
+
+  # Terraform tasks for Vault configuration
+  terraform:install:
+    desc: Install Terraform using devbox
+    cmds:
+      - |
+        if command -v terraform &> /dev/null; then
+          echo "Terraform is already installed: $(terraform version)"
+        else
+          echo "Installing Terraform globally with devbox..."
+          devbox global add terraform
+          echo "✓ Terraform installed successfully!"
+          terraform version
+        fi
+    silent: false
+
+  terraform:init:
+    desc: Initialize Terraform for Vault configuration
+    dir: vault-terraform
+    cmds:
+      - terraform init
+    silent: false
+
+  terraform:plan:
+    desc: Plan Terraform changes for Vault
+    dir: vault-terraform
+    cmds:
+      - |
+        ROOT_TOKEN=$(grep 'Initial Root Token:' ../vault/vault-init-keys.txt | awk '{print $NF}')
+        terraform plan -var="vault_token=$ROOT_TOKEN"
+    silent: false
+
+  terraform:apply:
+    desc: Apply Terraform configuration to Vault
+    dir: vault-terraform
+    cmds:
+      - |
+        ROOT_TOKEN=$(grep 'Initial Root Token:' ../vault/vault-init-keys.txt | awk '{print $NF}')
+        terraform apply -var="vault_token=$ROOT_TOKEN" -auto-approve
+        echo "✓ Vault configured for Percona PostgreSQL TDE!"
+    silent: false
+
+  terraform:destroy:
+    desc: Destroy Terraform-managed Vault resources
+    dir: vault-terraform
+    cmds:
+      - |
+        ROOT_TOKEN=$(grep 'Initial Root Token:' ../vault/vault-init-keys.txt | awk '{print $NF}')
+        terraform destroy -var="vault_token=$ROOT_TOKEN" -auto-approve
+    silent: false
+
+  terraform:output:
+    desc: Show Terraform outputs
+    dir: vault-terraform
+    cmds:
+      - terraform output
+    silent: false
+
+  # Percona PostgreSQL Operator tasks
+  percona:install:
+    desc: Install Percona PostgreSQL Operator
+    cmds:
+      - |
+        helm upgrade --install percona-postgresql-operator percona/pg-operator \
+          --namespace percona \
+          --create-namespace \
+          --values percona/operator-values.yaml \
+          --wait
+        echo "✓ Percona PostgreSQL Operator installed!"
+    silent: false
+
+  percona:uninstall:
+    desc: Uninstall Percona PostgreSQL Operator
+    cmds:
+      - helm uninstall percona-postgresql-operator --namespace percona
+    silent: false
+
+  percona:cluster:create:
+    desc: Create PostgreSQL cluster with TDE
+    cmds:
+      - |
+        kubectl create namespace percona --dry-run=client -o yaml | kubectl apply -f -
+        kubectl apply -f percona/tde-config/vault-integration.yaml
+        kubectl apply -f percona/pg-cluster.yaml
+        echo "✓ PostgreSQL cluster creation initiated!"
+        echo "Monitor with: kubectl get pods -n percona -w"
+    silent: false
+
+  percona:cluster:delete:
+    desc: Delete PostgreSQL cluster
+    cmds:
+      - kubectl delete -f percona/pg-cluster.yaml
+    silent: false
+
+  percona:status:
+    desc: Check Percona PostgreSQL cluster status
+    cmds:
+      - |
+        echo "=== PostgreSQL Cluster Status ==="
+        kubectl get pg -n percona
+        echo ""
+        echo "=== PostgreSQL Pods ==="
+        kubectl get pods -n percona
+        echo ""
+        echo "=== PostgreSQL Services ==="
+        kubectl get svc -n percona
+    silent: false
+
+  percona:logs:
+    desc: View PostgreSQL cluster logs
+    cmds:
+      - kubectl logs -n percona -l postgres-operator.crunchydata.com/cluster=pg-cluster -f
+    silent: false
+
+  percona:connect:
+    desc: Connect to PostgreSQL cluster
+    cmds:
+      - |
+        echo "Getting PostgreSQL credentials..."
+        PGPASSWORD=$(kubectl get secret -n percona pg-cluster-pguser-pguser -o jsonpath='{.data.password}' | base64 -d)
+        PGHOST=$(kubectl get svc -n percona pg-cluster-pgbouncer -o jsonpath='{.spec.clusterIP}')
+        echo "PostgreSQL connection info:"
+        echo "  Host: $PGHOST"
+        echo "  Port: 5432"
+        echo "  Database: pgdb"
+        echo "  User: pguser"
+        echo "  Password: $PGPASSWORD"
+        echo ""
+        echo "To connect:"
+        echo "kubectl run -it --rm psql --image=postgres:16 --restart=Never -- psql -h $PGHOST -U pguser -d pgdb"
+    silent: false
+
+  # TDE Tasks
+  percona:tde:init:
+    desc: Initialize TDE on PostgreSQL cluster with Vault integration
+    cmds:
+      - |
+        echo "=== Initializing Percona PostgreSQL TDE with Vault ==="
+        echo ""
+
+        # Get Vault root token
+        ROOT_TOKEN=$(grep 'Initial Root Token:' vault/vault-init-keys.txt | awk '{print $NF}')
+        if [ -z "$ROOT_TOKEN" ]; then
+          echo "❌ Failed to get Vault root token from vault/vault-init-keys.txt"
+          exit 1
+        fi
+        echo "✓ Retrieved Vault root token"
+
+        # Create Vault token secret
+        echo ""
+        echo "Creating Vault token secret in percona namespace..."
+        kubectl apply -f - <<EOF
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: vault-token
+          namespace: percona
+        type: Opaque
+        stringData:
+          token: "$ROOT_TOKEN"
+        EOF
+        echo "✓ Vault token secret created"
+
+        # Configure Vault with TDE key
+        echo ""
+        echo "Configuring Vault with TDE encryption key..."
+        kubectl exec -n vault vault-0 -- vault login "$ROOT_TOKEN" > /dev/null 2>&1
+        kubectl exec -n vault vault-0 -- vault kv put secret/tde/global-key value="encrypted-data-key"
+        echo "✓ Vault TDE key configured at secret/tde/global-key"
+
+        # Wait for PostgreSQL pod
+        echo ""
+        echo "Waiting for PostgreSQL pod to be ready..."
+        kubectl wait --for=jsonpath='{.status.phase}'=Running pod -n percona -l postgres-operator.crunchydata.com/cluster=pg-cluster,postgres-operator.crunchydata.com/data=postgres,postgres-operator.crunchydata.com/role=primary --timeout=300s
+        sleep 5
+
+        POD_NAME=$(kubectl get pods -n percona -l postgres-operator.crunchydata.com/cluster=pg-cluster,postgres-operator.crunchydata.com/data=postgres,postgres-operator.crunchydata.com/role=primary -o jsonpath='{.items[0].metadata.name}')
+        echo "✓ PostgreSQL pod ready: $POD_NAME"
+
+        # Copy Vault token to pod
+        echo ""
+        echo "Copying Vault token to PostgreSQL pod..."
+        kubectl exec -n percona "$POD_NAME" -c database -- mkdir -p /tmp/vault
+        kubectl exec -n percona "$POD_NAME" -c database -- sh -c "echo '$ROOT_TOKEN' > /tmp/vault/token.txt"
+        echo "✓ Vault token copied to pod"
+
+        # Initialize pg_tde extension
+        echo ""
+        echo "Initializing pg_tde extension..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS pg_tde;"
+        echo "✓ pg_tde extension created"
+
+        # Configure Vault as key provider
+        echo ""
+        echo "Configuring Vault as global key provider..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT pg_tde_add_global_key_provider_vault_v2('vault-provider', 'http://vault.vault.svc.cluster.local:8200', 'secret/data/tde/global-key', '/tmp/vault/token.txt', NULL);"
+        echo "✓ Vault provider configured"
+
+        # Create master encryption key
+        echo ""
+        echo "Creating master encryption key..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT pg_tde_create_key_using_global_key_provider('global-master-key', 'vault-provider');"
+        echo "✓ Master encryption key created"
+
+        # Set default key
+        echo ""
+        echo "Setting default encryption key..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT pg_tde_set_default_key_using_global_key_provider('global-master-key', 'vault-provider');"
+        echo "✓ Default encryption key set"
+
+        # Verify configuration
+        echo ""
+        echo "Verifying TDE configuration..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT * FROM pg_tde_list_all_global_key_providers();"
+        echo ""
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT * FROM pg_tde_default_key_info();"
+
+        echo ""
+        echo "=== TDE Initialization Complete ==="
+        echo ""
+        echo "You can now create encrypted tables using:"
+        echo "  CREATE TABLE table_name (...) USING tde_heap;"
+        echo ""
+        echo "Verify encryption with:"
+        echo "  SELECT pg_tde_is_encrypted('table_name');"
+    silent: false
+
+  percona:tde:verify:
+    desc: Verify TDE is working on PostgreSQL cluster
+    vars:
+      TABLE_NAME: '{{default "" .TABLE_NAME}}'
+    cmds:
+      - |
+        echo "=== Percona PostgreSQL TDE Verification ==="
+        echo ""
+
+        # Get pod name
+        POD_NAME=$(kubectl get pods -n percona -l postgres-operator.crunchydata.com/cluster=pg-cluster,postgres-operator.crunchydata.com/data=postgres,postgres-operator.crunchydata.com/role=primary -o jsonpath='{.items[0].metadata.name}')
+
+        if [ -z "$POD_NAME" ]; then
+          echo "❌ PostgreSQL pod not found"
+          exit 1
+        fi
+
+        echo "✓ PostgreSQL pod: $POD_NAME"
+        echo ""
+
+        # Check if pg_tde is loaded
+        echo "Checking if pg_tde is loaded..."
+        SHARED_LIBS=$(kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -t -c "SHOW shared_preload_libraries;")
+        if echo "$SHARED_LIBS" | grep -q "pg_tde"; then
+          echo "✓ pg_tde is loaded in shared_preload_libraries"
+        else
+          echo "❌ pg_tde is NOT loaded"
+          exit 1
+        fi
+        echo ""
+
+        # Check pg_tde extension
+        echo "Checking pg_tde extension..."
+        EXTENSION=$(kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -t -c "SELECT extname FROM pg_extension WHERE extname = 'pg_tde';")
+        if echo "$EXTENSION" | grep -q "pg_tde"; then
+          echo "✓ pg_tde extension is installed"
+        else
+          echo "❌ pg_tde extension is NOT installed"
+          exit 1
+        fi
+        echo ""
+
+        # Check key providers
+        echo "Checking key providers..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT * FROM pg_tde_list_all_global_key_providers();"
+        echo ""
+
+        # Check default key
+        echo "Checking default encryption key..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT * FROM pg_tde_default_key_info();"
+        echo ""
+
+        # Check encrypted tables
+        echo "Checking encrypted tables..."
+        kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -c "SELECT c.relname, am.amname FROM pg_class c JOIN pg_am am ON c.relam = am.oid WHERE am.amname = 'tde_heap';"
+        echo ""
+
+        # Verify specific table if provided
+        if [ -n "{{.TABLE_NAME}}" ]; then
+          echo "Verifying encryption for table: {{.TABLE_NAME}}"
+          IS_ENCRYPTED=$(kubectl exec -n percona "$POD_NAME" -c database -- psql -U postgres -t -c "SELECT pg_tde_is_encrypted('{{.TABLE_NAME}}');")
+          if echo "$IS_ENCRYPTED" | grep -q "t"; then
+            echo "✓ Table '{{.TABLE_NAME}}' is encrypted"
+          else
+            echo "❌ Table '{{.TABLE_NAME}}' is NOT encrypted"
+          fi
+          echo ""
+        fi
+
+        echo "=== TDE Verification Complete ==="
+    silent: false
+
+  # Complete setup workflows
+  vault:setup:
+    desc: Complete Vault setup (install, init, unseal, ingress, terraform)
+    cmds:
+      - task: vault:install
+      - task: vault:init
+      - task: vault:unseal
+      - task: vault:ingress:apply
+      - task: terraform:init
+      - task: terraform:apply
+      - |
+        echo ""
+        echo "✓ Vault setup complete!"
+        echo "Access Vault at http://vault.127-0-0-1.nip.io"
+    silent: false
+
+  percona:setup:
+    desc: Complete Percona setup (install operator, deploy cluster, init TDE)
+    cmds:
+      - task: percona:install
+      - |
+        echo "Deploying PostgreSQL cluster with TDE configuration..."
+        kubectl apply -f percona/tde-cluster.yaml
+        echo "Waiting for cluster to be ready..."
+        sleep 30
+      - task: percona:tde:init
+      - task: percona:tde:verify
+      - |
+        echo ""
+        echo "✓ Percona PostgreSQL with TDE setup complete!"
+    silent: false
+
+  all:setup:
+    desc: Complete setup of Vault and Percona with TDE
+    cmds:
+      - task: vault:setup
+      - task: percona:setup
+      - |
+        echo ""
+        echo "=========================================="
+        echo "✓ Complete setup finished!"
+        echo "=========================================="
+        echo ""
+        echo "Vault: http://vault.127-0-0-1.nip.io"
+        echo "PostgreSQL cluster: pg-cluster (namespace: percona)"
+        echo "TDE Status: Enabled with Vault integration"
+        echo ""
+        echo "Next steps:"
+        echo "1. Create encrypted tables: CREATE TABLE ... USING tde_heap;"
+        echo "2. Verify encryption: SELECT pg_tde_is_encrypted('table_name');"
+        echo "3. Check status: task percona:status"
+    silent: false

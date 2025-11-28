@@ -1,0 +1,14 @@
+# Vault integration configuration for PostgreSQL TDE
+# This ConfigMap will be used to configure Vault integration
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-tde-config
+  namespace: percona
+data:
+  vault-addr: "http://vault.vault.svc.cluster.local:8200"
+  vault-auth-path: "kubernetes"
+  vault-role: "percona-postgres-role"
+  vault-transit-path: "transit"
+  vault-key-name: "postgres-tde-key"

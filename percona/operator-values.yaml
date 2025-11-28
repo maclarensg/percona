@@ -1,0 +1,18 @@
+# Percona PostgreSQL Operator Helm Values
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+
+# Operator configuration
+watchNamespace: ""
+watchAllNamespaces: true
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 256Mi
+    cpu: 200m

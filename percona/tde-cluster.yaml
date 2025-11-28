@@ -1,0 +1,47 @@
+apiVersion: pgv2.percona.com/v2
+kind: PerconaPGCluster
+metadata:
+  name: pg-cluster
+  namespace: percona
+spec:
+  crVersion: 2.8.0
+  image: docker.io/percona/percona-distribution-postgresql:17.6-1
+  imagePullPolicy: IfNotPresent
+  postgresVersion: 17
+
+  # Enable pg_tde via patroni configuration
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          shared_preload_libraries: "pg_tde"
+          max_connections: "100"
+          shared_buffers: "256MB"
+
+  instances:
+  - name: instance1
+    replicas: 1
+    dataVolumeClaimSpec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+
+  proxy:
+    pgBouncer:
+      image: docker.io/percona/percona-pgbouncer:1.24.1-1
+      replicas: 1
+
+  backups:
+    pgbackrest:
+      image: docker.io/percona/percona-pgbackrest:2.56.0-1
+      repos:
+      - name: repo1
+        volume:
+          volumeClaimSpec:
+            accessModes:
+            - ReadWriteOnce
+            resources:
+              requests:
+                storage: 1Gi

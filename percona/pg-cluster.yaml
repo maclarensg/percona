@@ -1,0 +1,102 @@
+apiVersion: pgv2.percona.com/v2
+kind: PerconaPGCluster
+metadata:
+  name: pg-cluster
+  namespace: percona
+spec:
+  crVersion: 2.5.0
+
+  # PostgreSQL configuration
+  postgresVersion: 16
+
+  # Image settings
+  image: percona/percona-postgresql-operator:2.5.0-ppg16-postgres
+  imagePullPolicy: IfNotPresent
+
+  # PostgreSQL instances
+  instances:
+    - name: instance1
+      replicas: 3
+      dataVolumeClaimSpec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: postgres-operator.crunchydata.com/cluster
+                      operator: In
+                      values:
+                        - pg-cluster
+                    - key: postgres-operator.crunchydata.com/instance-set
+                      operator: In
+                      values:
+                        - instance1
+                topologyKey: kubernetes.io/hostname
+
+  # Backups configuration
+  backups:
+    pgbackrest:
+      image: percona/percona-postgresql-operator:2.5.0-ppg16-pgbackrest
+      repos:
+        - name: repo1
+          volume:
+            volumeClaimSpec:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 10Gi
+
+  # Proxy configuration
+  proxy:
+    pgBouncer:
+      image: percona/percona-postgresql-operator:2.5.0-ppg16-pgbouncer
+      replicas: 3
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 200m
+          memory: 256Mi
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: postgres-operator.crunchydata.com/cluster
+                      operator: In
+                      values:
+                        - pg-cluster
+                    - key: postgres-operator.crunchydata.com/role
+                      operator: In
+                      values:
+                        - pgbouncer
+                topologyKey: kubernetes.io/hostname
+
+  # PMM (Percona Monitoring and Management) - disabled
+  # pmm:
+  #   enabled: false
+
+  # Users
+  users:
+    - name: pguser
+      databases:
+        - pgdb
+      options: "SUPERUSER"
